@@ -69,14 +69,41 @@ bot.on('text', async (ctx, next) => {
     const state = tempState[ctx.from.id];
     if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
 
-    if (state.step === 'searching') {
-        const data = await readData();
-        const results = data.users.filter(u => u.name.toLowerCase().includes(ctx.message.text.toLowerCase()));
-        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون بهذا الاسم.');
-        
-        ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name, `select_${u.id}`)])));
+    // 🔴 حماية البوت: إذا ضغط المدير على أي زر أثناء الإدخال، يتم إلغاء العملية السابقة
+    const buttonsText = ['📋 حالتي', '🏠 طلب كود نيتفليكس', '📞 الدعم', '⚙️ إدارة المشتركين', '🔍 البحث عن زبون'];
+    if (buttonsText.includes(ctx.message.text)) {
         delete tempState[ctx.from.id];
-    } else {
-        // (نظام الخطوات email, profile, date كما هو في الكود السابق)
+        return next();
+    }
+
+    const data = await readData();
+
+    if (state.step === 'searching') {
+        const results = data.users.filter(u => u.name && u.name.toLowerCase().includes(ctx.message.text.toLowerCase()));
+        delete tempState[ctx.from.id]; // إنهاء وضع البحث فوراً حتى لو لم يجد نتيجة
+        
+        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون بهذا الاسم.');
+        return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name || u.id, `select_${u.id}`)])));
+    } 
+    
+    // باقي خطوات الإدخال (الإيميل، البروفايل، التاريخ)
+    const idx = data.users.findIndex(u => u.id === Number(state.targetId));
+    if (idx !== -1) {
+        if (state.step === 'email') {
+            data.users[idx].email = ctx.message.text;
+            state.step = 'profile';
+            await writeData(data);
+            ctx.reply('✅ تم حفظ الإيميل. أرسل الآن اسم البروفايل:');
+        } else if (state.step === 'profile') {
+            data.users[idx].profileName = ctx.message.text;
+            state.step = 'date';
+            await writeData(data);
+            ctx.reply('✅ تم حفظ البروفايل. أرسل الآن تاريخ الانتهاء (YYYY-MM-DD):');
+        } else if (state.step === 'date') {
+            data.users[idx].expiryDate = ctx.message.text;
+            await writeData(data);
+            delete tempState[ctx.from.id]; // إنهاء وضع التعديل
+            ctx.reply('🎉 تم تحديث البيانات بنجاح!');
+        }
     }
 });
