@@ -1,10 +1,23 @@
 {
-  "name": "tele-bot",
-  "version": "1.0.0",
-  "dependencies": {
-    "axios": "^1.11.0",
-    "dotenv": "^16.4.5",
-    "telegraf": "^4.16.3"
-  },
-  "type": "commonjs"
+  "version": 2,
+  "crons": [
+    {
+      "path": "/api/check-expiry",
+      "schedule": "0 10 * * *"
+    },
+    {
+      "path": "/api/admin-digest",
+      "schedule": "30 10 * * *"
+    }
+  ],
+  "builds": [
+    { "src": "api/*.js", "use": "@vercel/node" }
+  ],
+  "routes": [
+    { "src": "/api/check-expiry", "dest": "/api/check-expiry.js" },
+    { "src": "/api/admin-digest", "dest": "/api/admin-digest.js" },
+    { "src": "/api/bot", "dest": "/api/bot.js" },
+    { "src": "/api/webhook", "dest": "/api/webhook.js" },
+    { "src": "/(.*)", "dest": "/api/index.js" }
+  ]
 }
