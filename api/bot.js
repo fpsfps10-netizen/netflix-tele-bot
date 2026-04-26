@@ -8,8 +8,8 @@ const ADMIN_IDS = process.env.ADMIN_USER_IDS
   ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()) 
   : [process.env.ADMIN_USER_ID];
 
-// --- ضع رقم هاتفك هنا بصيغة دولية بدون + ---
 const WHATSAPP_URL = 'https://wa.me/213555862000?text=سلام،%20أريد%20الاستفسار%20عن%20اشتراك%20Mrnflix';
+
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
     const data = await readData();
@@ -17,42 +17,61 @@ bot.start(async (ctx) => {
         data.users.push({ id: userId, name: ctx.from.first_name, addedAt: new Date().toISOString(), tag: 'جديد' });
         await writeData(data);
     }
+
+    // إنشاء لوحة المفاتيح
+    let buttons = [['📋 حالتي', '📞 الدعم']];
+    // إذا كان المستخدم مديراً، نضيف له زر الإدارة
+    if (ADMIN_IDS.includes(String(userId))) {
+        buttons.push(['⚙️ إدارة المشتركين']);
+    }
+
     ctx.replyWithHTML(`👋 مرحباً بك في <b>Mrnflix</b>!\nID الخاص بك هو: <code>${userId}</code>`, 
-    Markup.keyboard([['📋 حالتي', '📞 الدعم']]).resize());
+    Markup.keyboard(buttons).resize());
 });
 
+// --- قسم الإدارة بالأزرار ---
+bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
+    const data = await readData();
+    if (data.users.length === 0) return ctx.reply('لا يوجد مستخدمون حالياً.');
+
+    ctx.reply('اختر مستخدماً لتعديل تاريخ انتهائه:', 
+        Markup.inlineKeyboard(
+            data.users.map(u => [Markup.button.callback(`${u.name} (${u.id})`, `edit_${u.id}`)])
+        )
+    );
+});
+
+// التعامل مع الضغط على اسم المستخدم
+bot.action(/edit_(.+)/, async (ctx) => {
+    const userId = ctx.match[1];
+    ctx.answerCbQuery();
+    ctx.replyWithHTML(`أرسل الآن التاريخ الجديد للمستخدم <code>${userId}</code> بصيغة:\n\n <code>set ${userId} 2026-05-30</code>\n\n(يمكنك نسخ الرقم ولصقه للتسهيل)`);
+});
+
+// الردود العادية
 bot.hears('📋 حالتي', async (ctx) => {
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً. تواصل مع الدعم للتفعيل.');
-    ctx.replyWithHTML(`👤 الحالة: مشترك نشط\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>\n📦 الفئة: ${user.tag || 'أساسي'}`);
+    ctx.replyWithHTML(`👤 الحالة: مشترك نشط\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>`);
 });
 
 bot.hears('📞 الدعم', (ctx) => {
     ctx.reply('للتحدث مع الدعم الفني، اضغط على الزر أدناه:', 
-    Markup.inlineKeyboard([
-        [Markup.button.url('🟢 مراسلة عبر واتساب', WHATSAPP_URL)]
-    ]));
+    Markup.inlineKeyboard([[Markup.button.url('🟢 مراسلة عبر واتساب', WHATSAPP_URL)]]));
 });
 
-bot.command('listusers', async (ctx) => {
+// بقاء أمر السيت القديم للاحتياط
+bot.hears(/^set (\d+) (\d{4}-\d{2}-\d{2})$/, async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
+    const [_, id, date] = ctx.match;
     const data = await readData();
-    let msg = '👥 قائمة المستخدمين:\n';
-    data.users.forEach(u => msg += `- ${u.name} (<code>${u.id}</code>): ${u.expiryDate || 'غير مفعل'}\n`);
-    ctx.replyWithHTML(msg);
-});
-
-bot.command('setexpire', async (ctx) => {
-    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
-    const args = ctx.message.text.split(' ');
-    if (args.length < 3) return ctx.reply('الاستخدام: /setexpire ID YYYY-MM-DD');
-    const data = await readData();
-    const idx = data.users.findIndex(u => u.id === Number(args[1]));
+    const idx = data.users.findIndex(u => u.id === Number(id));
     if (idx !== -1) {
-        data.users[idx].expiryDate = args[2];
+        data.users[idx].expiryDate = date;
         await writeData(data);
-        ctx.reply('✅ تم تحديث التاريخ بنجاح.');
+        ctx.reply(`✅ تم تحديث تاريخ ${data.users[idx].name} إلى ${date}`);
     } else {
         ctx.reply('❌ المستخدم غير موجود.');
     }
