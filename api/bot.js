@@ -3,37 +3,95 @@ const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
-let tempState = {}; // لحفظ خطوات الإدخال والبحث مؤقتاً
+let tempState = {}; 
 
-// --- 1. وظيفة التحقق من انتهاء الاشتراكات (Cron Job) ---
-async function checkExpirations() {
-    const data = await readData();
-    const today = new Date();
-    const inTwoDays = new Date();
-    inTwoDays.setDate(today.getDate() + 2);
-    const dateStr = inTwoDays.toISOString().split('T')[0];
-
-    for (const user of data.users) {
-        if (user.expiryDate === dateStr) {
-            try {
-                await bot.telegram.sendMessage(user.id, `⚠️ <b>تنبيه تجديد الاشتراك</b>\n\nعزيزي <b>${user.name || 'المشترك'}</b>، اشتراكك (${user.profileName}) ينتهي بعد يومين.\nيرجى التواصل معنا للتجديد لضمان استمرار الخدمة.`, { parse_mode: 'HTML' });
-            } catch (e) { console.log("Error sending notice to", user.id); }
-        }
-    }
-}
-
-// --- 2. المعالج الرئيسي (المنسق بين Instaddr و Telegram) ---
+// --- 1. معالج العمليات (Webhook لـ Instaddr وتنبيهات الانتهاء) ---
 module.exports = async (req, res) => {
     try {
-        // تشغيل فحص التواريخ عبر رابط Vercel Cron
+        // فحص التنبيهات المجدولة (Cron Job)
         if (req.query && req.query.key === 'run_cron') {
-            await checkExpirations();
-            return res.status(200).send('Cron Check Completed');
+            const data = await readData();
+            const today = new Date();
+            const inTwoDays = new Date();
+            inTwoDays.setDate(today.getDate() + 2);
+            const dateStr = inTwoDays.toISOString().split('T')[0];
+
+            for (const user of data.users) {
+                if (user.expiryDate === dateStr) {
+                    await bot.telegram.sendMessage(user.id, `⚠️ <b>تنبيه</b>: اشتراكك ينتهي بعد يومين (${user.expiryDate}). يرجى التواصل للتجديد.`, { parse_mode: 'HTML' });
+                }
+            }
+            return res.status(200).send('Notifications Sent');
         }
 
-        // استقبال الإيميلات من تطبيق Instaddr
+        // استقبال أكواد نيتفليكس من Instaddr
         if (req.body && req.body.to && req.body.content) {
             const code = (req.body.content.match(/\b\d{4,8}\b/) || [])[0];
             if (code) {
                 const data = await readData();
-                const target
+                const targetUsers = data.users.filter(u => u.email === req.body.to);
+                for (const user of targetUsers) {
+                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك كود جديد!</b>\n🔢 الكود هو: <code>${code}</code>\n👤 الحساب: ${user.email}`, { parse_mode: 'HTML' });
+                }
+            }
+            return res.status(200).send('OK');
+        }
+
+        if (req.body && req.body.update_id) {
+            await bot.handleUpdate(req.body);
+        }
+    } catch (e) { console.error(e); }
+    res.status(200).send('OK');
+};
+
+// --- 2. تعريف الأزرار والردود ---
+bot.start(async (ctx) => {
+    const data = await readData();
+    if (!data.users.find(u => u.id === ctx.from.id)) {
+        data.users.push({ id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '' });
+        await writeData(data);
+    }
+    // بناء لوحة التحكم الموضحة في صورتك
+    const keyboard = [['📋 حالتي', '🏠 طلب كود نيتفليكس'], ['📞 الدعم']];
+    if (ADMIN_IDS.includes(String(ctx.from.id))) {
+        keyboard.push(['⚙️ إدارة المشتركين', '🔍 البحث عن زبون']);
+    }
+    ctx.reply('مرحباً بك في MrnflixBot:', Markup.keyboard(keyboard).resize());
+});
+
+bot.hears('📋 حالتي', async (ctx) => {
+    const data = await readData();
+    const user = data.users.find(u => u.id === ctx.from.id);
+    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً.');
+    ctx.replyWithHTML(`👤 البروفايل: ${user.profileName}\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>\n📧 الحساب: ${user.email}`);
+});
+
+bot.hears('🏠 طلب كود نيتفليكس', (ctx) => {
+    ctx.reply('✅ نظام الأكواد التلقائي نشط. سيظهر الكود هنا فور وصوله.');
+});
+
+bot.hears('🔍 البحث عن زبون', (ctx) => {
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
+    tempState[ctx.from.id] = { step: 'searching' };
+    ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
+});
+
+bot.on('text', async (ctx, next) => {
+    const state = tempState[ctx.from.id];
+    if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
+
+    // منع تكرار الأخطاء عند الضغط على أزرار أخرى أثناء البحث
+    if (['📋 حالتي', '🏠 طلب كود نيتفليكس', '📞 الدعم', '⚙️ إدارة المشتركين', '🔍 البحث عن زبون'].includes(ctx.message.text)) {
+        delete tempState[ctx.from.id];
+        return next();
+    }
+
+    const data = await readData();
+    if (state.step === 'searching') {
+        const results = data.users.filter(u => u.name && u.name.toLowerCase().includes(ctx.message.text.toLowerCase()));
+        delete tempState[ctx.from.id];
+        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون بهذا الاسم.');
+        return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name, `select_${u.id}`)])));
+    }
+    // (بقية منطق الإضافة: الإيميل، البروفايل، التاريخ...)
+});
