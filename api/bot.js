@@ -2,36 +2,21 @@ const { Telegraf, Markup } = require('telegraf');
 const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
+// تأكد من وضع ID حسابك في Vercel بشكل صحيح
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
 let tempState = {}; 
 
-// --- 1. معالج العمليات (Webhook لـ Instaddr وتنبيهات الانتهاء) ---
+// --- 1. المعالج الرئيسي (Webhook) ---
 module.exports = async (req, res) => {
     try {
-        // فحص التنبيهات المجدولة (Cron Job)
-        if (req.query && req.query.key === 'run_cron') {
-            const data = await readData();
-            const today = new Date();
-            const inTwoDays = new Date();
-            inTwoDays.setDate(today.getDate() + 2);
-            const dateStr = inTwoDays.toISOString().split('T')[0];
-
-            for (const user of data.users) {
-                if (user.expiryDate === dateStr) {
-                    await bot.telegram.sendMessage(user.id, `⚠️ <b>تنبيه</b>: اشتراكك ينتهي بعد يومين (${user.expiryDate}). يرجى التواصل للتجديد.`, { parse_mode: 'HTML' });
-                }
-            }
-            return res.status(200).send('Notifications Sent');
-        }
-
-        // استقبال أكواد نيتفليكس من Instaddr
         if (req.body && req.body.to && req.body.content) {
+            // معالجة الأكواد من Instaddr
             const code = (req.body.content.match(/\b\d{4,8}\b/) || [])[0];
             if (code) {
                 const data = await readData();
                 const targetUsers = data.users.filter(u => u.email === req.body.to);
                 for (const user of targetUsers) {
-                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك كود جديد!</b>\n🔢 الكود هو: <code>${code}</code>\n👤 الحساب: ${user.email}`, { parse_mode: 'HTML' });
+                    await bot.telegram.sendMessage(user.id, `📩 <b>كود جديد:</b> <code>${code}</code>`, { parse_mode: 'HTML' });
                 }
             }
             return res.status(200).send('OK');
@@ -40,58 +25,97 @@ module.exports = async (req, res) => {
         if (req.body && req.body.update_id) {
             await bot.handleUpdate(req.body);
         }
-    } catch (e) { console.error(e); }
+    } catch (err) { console.error("Error:", err); }
     res.status(200).send('OK');
 };
 
-// --- 2. تعريف الأزرار والردود ---
+// --- 2. الأوامر المباشرة (يجب أن تكون في البداية) ---
+
 bot.start(async (ctx) => {
     const data = await readData();
     if (!data.users.find(u => u.id === ctx.from.id)) {
         data.users.push({ id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '' });
         await writeData(data);
     }
-    // بناء لوحة التحكم الموضحة في صورتك
     const keyboard = [['📋 حالتي', '🏠 طلب كود نيتفليكس'], ['📞 الدعم']];
     if (ADMIN_IDS.includes(String(ctx.from.id))) {
         keyboard.push(['⚙️ إدارة المشتركين', '🔍 البحث عن زبون']);
     }
-    ctx.reply('مرحباً بك في MrnflixBot:', Markup.keyboard(keyboard).resize());
+    ctx.reply('مرحباً بك في Mrnflix:', Markup.keyboard(keyboard).resize());
 });
 
-bot.hears('📋 حالتي', async (ctx) => {
+bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return ctx.reply('🚫 عذراً، هذا الأمر مخصص للإدارة فقط.');
+    
     const data = await readData();
-    const user = data.users.find(u => u.id === ctx.from.id);
-    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً.');
-    ctx.replyWithHTML(`👤 البروفايل: ${user.profileName}\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>\n📧 الحساب: ${user.email}`);
-});
+    if (data.users.length === 0) return ctx.reply('لا يوجد مشتركين حالياً.');
 
-bot.hears('🏠 طلب كود نيتفليكس', (ctx) => {
-    ctx.reply('✅ نظام الأكواد التلقائي نشط. سيظهر الكود هنا فور وصوله.');
+    // عرض آخر 15 مشترك لتفادي رسائل تليجرام الطويلة
+    const list = data.users.slice(-15).map(u => [Markup.button.callback(u.name || String(u.id), `select_${u.id}`)]);
+    ctx.reply('اختر زبوناً لتعديل بياناته:', Markup.inlineKeyboard(list));
 });
 
 bot.hears('🔍 البحث عن زبون', (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     tempState[ctx.from.id] = { step: 'searching' };
-    ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
+    ctx.reply('🔎 أرسل اسم الزبون الذي تبحث عنه:');
 });
 
+bot.hears('📋 حالتي', async (ctx) => {
+    const data = await readData();
+    const user = data.users.find(u => u.id === ctx.from.id);
+    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل.');
+    ctx.replyWithHTML(`👤 البروفايل: ${user.profileName}\n📅 الانتهاء: <code>${user.expiryDate}</code>`);
+});
+
+bot.hears('🏠 طلب كود نيتفليكس', (ctx) => {
+    ctx.reply('✅ نظام الأكواد التلقائي نشط.');
+});
+
+// --- 3. معالجة الأزرار التفاعلية (Inline Buttons) ---
+bot.action(/select_(.+)/, (ctx) => {
+    const userId = ctx.match[1];
+    tempState[ctx.from.id] = { targetId: userId, step: 'email' };
+    ctx.answerCbQuery();
+    ctx.reply('📧 أرسل إيميل Instaddr لهذا المشترك:');
+});
+
+// --- 4. معالجة النصوص العامة والبحث (يجب أن تكون في النهاية) ---
 bot.on('text', async (ctx, next) => {
     const state = tempState[ctx.from.id];
+    
+    // إذا لم يكن هناك "حالة انتظار" أو ليس أدمن، نمرر الأمر للأزرار الأخرى
     if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
 
-    // منع تكرار الأخطاء عند الضغط على أزرار أخرى أثناء البحث
-    if (['📋 حالتي', '🏠 طلب كود نيتفليكس', '📞 الدعم', '⚙️ إدارة المشتركين', '🔍 البحث عن زبون'].includes(ctx.message.text)) {
-        delete tempState[ctx.from.id];
-        return next();
-    }
-
     const data = await readData();
+
     if (state.step === 'searching') {
-        const results = data.users.filter(u => u.name && u.name.toLowerCase().includes(ctx.message.text.toLowerCase()));
+        const query = ctx.message.text.toLowerCase();
+        const results = data.users.filter(u => (u.name && u.name.toLowerCase().includes(query)) || (u.email && u.email.toLowerCase().includes(query)));
         delete tempState[ctx.from.id];
-        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون بهذا الاسم.');
+        
+        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على نتائج.');
         return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name, `select_${u.id}`)])));
     }
-    // (بقية منطق الإضافة: الإيميل، البروفايل، التاريخ...)
+
+    // منطق التحديث (Email -> Profile -> Date)
+    const targetIdx = data.users.findIndex(u => u.id === Number(state.targetId));
+    if (targetIdx !== -1) {
+        if (state.step === 'email') {
+            data.users[targetIdx].email = ctx.message.text;
+            state.step = 'profile';
+            await writeData(data);
+            ctx.reply('✅ تم حفظ الإيميل. الآن أرسل اسم البروفايل:');
+        } else if (state.step === 'profile') {
+            data.users[targetIdx].profileName = ctx.message.text;
+            state.step = 'date';
+            await writeData(data);
+            ctx.reply('✅ تم حفظ البروفايل. الآن أرسل تاريخ الانتهاء (YYYY-MM-DD):');
+        } else if (state.step === 'date') {
+            data.users[targetIdx].expiryDate = ctx.message.text;
+            await writeData(data);
+            delete tempState[ctx.from.id];
+            ctx.reply('🎉 تم تحديث بيانات الزبون بنجاح!');
+        }
+    }
 });
