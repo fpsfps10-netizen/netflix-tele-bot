@@ -1,83 +1,64 @@
 const { Telegraf, Markup } = require('telegraf');
-const path = require('path');
-require('dotenv').config({ path: path.resolve(process.cwd(), '.env') });
 const { readData, writeData } = require('../lib/database');
-
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
-const ADMIN_IDS = process.env.ADMIN_USER_IDS 
-  ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()) 
-  : [process.env.ADMIN_USER_ID];
 
-const WHATSAPP_URL = 'https://wa.me/213555862000?text=سلام،%20أريد%20الاستفسار%20عن%20اشتراك%20Mrnflix';
+const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
+let tempState = {}; // لتخزين الحالة المؤقتة أثناء الإدخال
 
 bot.start(async (ctx) => {
-    const userId = ctx.from.id;
     const data = await readData();
-    if (!data.users.find(u => u.id === userId)) {
-        data.users.push({ id: userId, name: ctx.from.first_name, addedAt: new Date().toISOString(), tag: 'جديد' });
+    if (!data.users.find(u => u.id === ctx.from.id)) {
+        data.users.push({ id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '' });
         await writeData(data);
     }
-
-    // إنشاء لوحة المفاتيح
-    let buttons = [['📋 حالتي', '📞 الدعم']];
-    // إذا كان المستخدم مديراً، نضيف له زر الإدارة
-    if (ADMIN_IDS.includes(String(userId))) {
-        buttons.push(['⚙️ إدارة المشتركين']);
-    }
-
-    ctx.replyWithHTML(`👋 مرحباً بك في <b>Mrnflix</b>!\nID الخاص بك هو: <code>${userId}</code>`, 
-    Markup.keyboard(buttons).resize());
+    let buttons = [['📋 حالتي', '🏠 طلب كود نيتفليكس'], ['📞 الدعم']];
+    if (ADMIN_IDS.includes(String(ctx.from.id))) buttons.push(['⚙️ إدارة المشتركين']);
+    ctx.reply('مرحباً بك في Mrnflix:', Markup.keyboard(buttons).resize());
 });
 
-// --- قسم الإدارة بالأزرار ---
+// --- لوحة التحكم للمدير ---
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     const data = await readData();
-    if (data.users.length === 0) return ctx.reply('لا يوجد مستخدمون حالياً.');
-
-    ctx.reply('اختر مستخدماً لتعديل تاريخ انتهائه:', 
-        Markup.inlineKeyboard(
-            data.users.map(u => [Markup.button.callback(`${u.name} (${u.id})`, `edit_${u.id}`)])
-        )
+    ctx.reply('اختر الزبون لتعديل بياناته:', 
+        Markup.inlineKeyboard(data.users.map(u => [Markup.button.callback(u.name, `select_${u.id}`)]))
     );
 });
 
-// التعامل مع الضغط على اسم المستخدم
-bot.action(/edit_(.+)/, async (ctx) => {
+// الخطوة 1: طلب الإيميل
+bot.action(/select_(.+)/, (ctx) => {
     const userId = ctx.match[1];
+    tempState[ctx.from.id] = { targetId: userId, step: 'email' };
     ctx.answerCbQuery();
-    ctx.replyWithHTML(`أرسل الآن التاريخ الجديد للمستخدم <code>${userId}</code> بصيغة:\n\n <code>set ${userId} 2026-05-30</code>\n\n(يمكنك نسخ الرقم ولصقه للتسهيل)`);
+    ctx.reply(`📧 أرسل الآن إيميل Instaddr الخاص بالزبون (ID: ${userId}):`);
 });
 
-// الردود العادية
-bot.hears('📋 حالتي', async (ctx) => {
+// الخطوة 2 و 3: معالجة الرسائل المرسلة من المدير
+bot.on('text', async (ctx) => {
+    const state = tempState[ctx.from.id];
+    if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return;
+
     const data = await readData();
-    const user = data.users.find(u => u.id === ctx.from.id);
-    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً. تواصل مع الدعم للتفعيل.');
-    ctx.replyWithHTML(`👤 الحالة: مشترك نشط\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>`);
-});
+    const idx = data.users.findIndex(u => u.id === Number(state.targetId));
 
-bot.hears('📞 الدعم', (ctx) => {
-    ctx.reply('للتحدث مع الدعم الفني، اضغط على الزر أدناه:', 
-    Markup.inlineKeyboard([[Markup.button.url('🟢 مراسلة عبر واتساب', WHATSAPP_URL)]]));
-});
-
-// بقاء أمر السيت القديم للاحتياط
-bot.hears(/^set (\d+) (\d{4}-\d{2}-\d{2})$/, async (ctx) => {
-    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
-    const [_, id, date] = ctx.match;
-    const data = await readData();
-    const idx = data.users.findIndex(u => u.id === Number(id));
-    if (idx !== -1) {
-        data.users[idx].expiryDate = date;
+    if (state.step === 'email') {
+        data.users[idx].email = ctx.message.text;
+        state.step = 'profile';
         await writeData(data);
-        ctx.reply(`✅ تم تحديث تاريخ ${data.users[idx].name} إلى ${date}`);
-    } else {
-        ctx.reply('❌ المستخدم غير موجود.');
+        ctx.reply(`✅ تم حفظ الإيميل. الآن أرسل "اسم البروفايل" (مثلاً: Ahmad):`);
+    } 
+    else if (state.step === 'profile') {
+        data.users[idx].profileName = ctx.message.text;
+        state.step = 'date';
+        await writeData(data);
+        ctx.reply(`✅ تم حفظ البروفايل. الآن أرسل "تاريخ الانتهاء" بصيغة (YYYY-MM-DD):`);
+    } 
+    else if (state.step === 'date') {
+        data.users[idx].expiryDate = ctx.message.text;
+        await writeData(data);
+        delete tempState[ctx.from.id]; // إنهاء العملية
+        ctx.reply(`🎉 تم اكتمال الإعداد بنجاح!\nالزبون: ${data.users[idx].name}\nالحساب: ${data.users[idx].email}\nالتاريخ: ${ctx.message.text}`);
     }
 });
 
-module.exports = async (req, res) => {
-    if (req.body) await bot.handleUpdate(req.body);
-    res.status(200).send('OK');
-};
+// --- استقبال
