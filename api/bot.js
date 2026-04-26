@@ -8,11 +8,8 @@ const ADMIN_IDS = process.env.ADMIN_USER_IDS
   ? process.env.ADMIN_USER_IDS.split(',').map(id => id.trim()) 
   : [process.env.ADMIN_USER_ID];
 
-const adminOnly = (ctx, next) => {
-    if (ADMIN_IDS.includes(String(ctx.from.id))) return next();
-    return ctx.reply('⚠️ هذا الأمر للمسؤولين فقط.');
-};
-
+// --- ضع رقم هاتفك هنا بصيغة دولية بدون + ---
+const WHATSAPP_URL = 'https://wa.me/213555862000?text=سلام،%20أريد%20الاستفسار%20عن%20اشتراك%20Mrnflix';
 bot.start(async (ctx) => {
     const userId = ctx.from.id;
     const data = await readData();
@@ -20,25 +17,44 @@ bot.start(async (ctx) => {
         data.users.push({ id: userId, name: ctx.from.first_name, addedAt: new Date().toISOString(), tag: 'جديد' });
         await writeData(data);
     }
-    ctx.replyWithHTML(`👋 مرحباً بك!\nID الخاص بك هو: <code>${userId}</code>`, 
+    ctx.replyWithHTML(`👋 مرحباً بك في <b>Mrnflix</b>!\nID الخاص بك هو: <code>${userId}</code>`, 
     Markup.keyboard([['📋 حالتي', '📞 الدعم']]).resize());
 });
 
 bot.hears('📋 حالتي', async (ctx) => {
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
-    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً.');
-    ctx.replyWithHTML(`👤 بروفايل: ${user.tag}\n📅 ينتهي: ${user.expiryDate}`);
+    if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل حالياً. تواصل مع الدعم للتفعيل.');
+    ctx.replyWithHTML(`👤 الحالة: مشترك نشط\n📅 تاريخ الانتهاء: <code>${user.expiryDate}</code>\n📦 الفئة: ${user.tag || 'أساسي'}`);
 });
 
-bot.command('setexpire', adminOnly, async (ctx) => {
+bot.hears('📞 الدعم', (ctx) => {
+    ctx.reply('للتحدث مع الدعم الفني، اضغط على الزر أدناه:', 
+    Markup.inlineKeyboard([
+        [Markup.button.url('🟢 مراسلة عبر واتساب', WHATSAPP_URL)]
+    ]));
+});
+
+bot.command('listusers', async (ctx) => {
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
+    const data = await readData();
+    let msg = '👥 قائمة المستخدمين:\n';
+    data.users.forEach(u => msg += `- ${u.name} (<code>${u.id}</code>): ${u.expiryDate || 'غير مفعل'}\n`);
+    ctx.replyWithHTML(msg);
+});
+
+bot.command('setexpire', async (ctx) => {
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     const args = ctx.message.text.split(' ');
+    if (args.length < 3) return ctx.reply('الاستخدام: /setexpire ID YYYY-MM-DD');
     const data = await readData();
     const idx = data.users.findIndex(u => u.id === Number(args[1]));
     if (idx !== -1) {
         data.users[idx].expiryDate = args[2];
         await writeData(data);
         ctx.reply('✅ تم تحديث التاريخ بنجاح.');
+    } else {
+        ctx.reply('❌ المستخدم غير موجود.');
     }
 });
 
