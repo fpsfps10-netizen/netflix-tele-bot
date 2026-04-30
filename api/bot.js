@@ -5,6 +5,9 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
 let tempState = {};
 
+// رقم الواتساب بصيغة الجزائر الدولية (احذف الصفر الأول من الرقم المحلي)
+const WHATSAPP_NUMBER = "213555862000";
+
 // --- 1. معالج الـ Webhook (Instaddr + Telegram) ---
 module.exports = async (req, res) => {
     try {
@@ -39,16 +42,30 @@ bot.start(async (ctx) => {
         ['📞 الدعم', '🔄 تجديد الاشتراك']
     ];
     if (ADMIN_IDS.includes(String(ctx.from.id))) keyboard.push(['⚙️ إدارة المشتركين', '🔍 البحث عن زبون']);
-    // رسالة ترحيب خاصة للمستخدم الجديد
+    
+    // رسالة ترحيب عند أول دخول
     if (isNew)
         ctx.reply('👋 أهلاً بك في بوت Mrnflix!\nيمكنك البدء بطلب كود نيتفليكس أو التواصل مع الدعم في أي وقت.');
+    
     ctx.reply('مرحباً بك في Mrnflix:', Markup.keyboard(keyboard).resize());
 });
 
-bot.hears('🔄 تجديد الاشتراك', (ctx) => {
-    ctx.reply('🔔 للتجديد يرجى التواصل مع الدعم أو ��رسال بياناتك هنا وسيتم خدمتك بأقرب وقت.');
+// زر الدعم مع رقم واتساب الجزائر
+bot.hears('📞 الدعم', (ctx) => {
+    ctx.reply(
+        `📞 للدعم عبر الواتساب:\n` +
+        `[اضغط هنا للمراسلة](https://wa.me/${WHATSAPP_NUMBER})\n` +
+        `أو أرسل على الرقم المباشر: ${WHATSAPP_NUMBER}`,
+        { parse_mode: 'Markdown' }
+    );
 });
 
+// زر تجديد الاشتراك
+bot.hears('🔄 تجديد الاشتراك', (ctx) => {
+    ctx.reply('🔔 لتجديد الاشتراك يرجى التواصل عبر الواتساب مع الدعم.');
+});
+
+// زر الإدارة
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     delete tempState[ctx.from.id];
@@ -57,12 +74,14 @@ bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     ctx.reply('⚙️ قائمة آخر المشتركين للتعديل:', Markup.inlineKeyboard(list));
 });
 
+// زر البحث عن زبون
 bot.hears('🔍 البحث عن زبون', (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     tempState[ctx.from.id] = { step: 'searching' };
     ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
 });
 
+// زر حالتي مع الأيام المتبقية
 bot.hears('📋 حالتي', async (ctx) => {
     delete tempState[ctx.from.id];
     const data = await readData();
@@ -83,6 +102,7 @@ bot.hears('📋 حالتي', async (ctx) => {
     ctx.replyWithHTML(msg);
 });
 
+// زر طلب كود نيتفليكس
 bot.hears('🏠 طلب كود نيتفليكس', (ctx) => {
     delete tempState[ctx.from.id];
     ctx.reply('✅ نظام الأكواد التلقائي نشط.');
