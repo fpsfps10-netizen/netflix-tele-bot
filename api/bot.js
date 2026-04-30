@@ -3,7 +3,7 @@ const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
-let tempState = {}; 
+let tempState = {};
 
 // --- 1. معالج الـ Webhook (Instaddr + Telegram) ---
 module.exports = async (req, res) => {
@@ -28,19 +28,30 @@ module.exports = async (req, res) => {
 
 bot.start(async (ctx) => {
     const data = await readData();
+    let isNew = false;
     if (!data.users.find(u => u.id === ctx.from.id)) {
         data.users.push({ id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '' });
         await writeData(data);
+        isNew = true;
     }
-    const keyboard = [['📋 حالتي', '🏠 طلب كود نيتفليكس'], ['📞 الدعم']];
+    const keyboard = [
+        ['📋 حالتي', '🏠 طلب كود نيتفليكس'],
+        ['📞 الدعم', '🔄 تجديد الاشتراك']
+    ];
     if (ADMIN_IDS.includes(String(ctx.from.id))) keyboard.push(['⚙️ إدارة المشتركين', '🔍 البحث عن زبون']);
+    // رسالة ترحيب خاصة للمستخدم الجديد
+    if (isNew)
+        ctx.reply('👋 أهلاً بك في بوت Mrnflix!\nيمكنك البدء بطلب كود نيتفليكس أو التواصل مع الدعم في أي وقت.');
     ctx.reply('مرحباً بك في Mrnflix:', Markup.keyboard(keyboard).resize());
 });
 
-// مصلح: وضعنا زر الإدارة قبل معالج النصوص لضمان عمله فوراً
+bot.hears('🔄 تجديد الاشتراك', (ctx) => {
+    ctx.reply('🔔 للتجديد يرجى التواصل مع الدعم أو ��رسال بياناتك هنا وسيتم خدمتك بأقرب وقت.');
+});
+
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
-    delete tempState[ctx.from.id]; // تصفير أي حالة بحث قديمة
+    delete tempState[ctx.from.id];
     const data = await readData();
     const list = data.users.slice(-15).map(u => [Markup.button.callback(u.name || String(u.id), `select_${u.id}`)]);
     ctx.reply('⚙️ قائمة آخر المشتركين للتعديل:', Markup.inlineKeyboard(list));
@@ -57,7 +68,19 @@ bot.hears('📋 حالتي', async (ctx) => {
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل.');
-    ctx.replyWithHTML(`👤 البروفايل: ${user.profileName}\n📅 الانتهاء: <code>${user.expiryDate}</code>`);
+
+    // حساب الأيام المتبقية
+    const today = new Date();
+    const expiry = new Date(user.expiryDate);
+    const diffTime = expiry.getTime() - today.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+    let msg = `👤 البروفايل: ${user.profileName}\n📅 الانتهاء: <code>${user.expiryDate}</code>`;
+    if (diffDays >= 0)
+        msg += `\n⏳ المتبقي: <b>${diffDays}</b> يوم`;
+    else
+        msg += `\n❗️ انتهى الاشتراك منذ <b>${Math.abs(diffDays)}</b> يوم`;
+    ctx.replyWithHTML(msg);
 });
 
 bot.hears('🏠 طلب كود نيتفليكس', (ctx) => {
