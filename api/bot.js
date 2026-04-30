@@ -5,21 +5,20 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
 let tempState = {};
 
-// رقم الواتساب بصيغة الجزائر
+// رقم الواتساب (الجزائر)
 const WHATSAPP_NUMBER = "213555862000";
 
-// دالة المساعد للتذكير قبل يوم ويوم الانتهاء
+// دالة التذكير الخاصة
 async function checkReminder(ctx, user, data) {
     if (!user || !user.expiryDate) return;
     const today = new Date();
     const expiry = new Date(user.expiryDate);
-    // ضبط التوقيت على منتصف الليل لإزالة مشكلات اختلاف الساعة
     today.setHours(0,0,0,0);
     expiry.setHours(0,0,0,0);
     const diffTime = expiry.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-    // إذا بقي يوم واحد (قبل الانتهاء بيوم)
+    // قبل يوم من الانتهاء
     if (diffDays === 1 && user.notifiedBefore !== true) {
         await ctx.replyWithHTML(`⏰ تذكير: باقي يوم واحد فقط على انتهاء اشتراكك. يرجى التجديد لتفادي الانقطاع.`);
         user.notifiedBefore = true;
@@ -31,7 +30,7 @@ async function checkReminder(ctx, user, data) {
         user.notifiedOnEnd = true;
         await writeData(data);
     }
-    // إذا تم تمديد الاشتراك (مرت الأيام)
+    // إذا جدد الاشتراك (أعيد التاريخ)، أزل إشعارات التذكير
     if (diffDays > 1 && (user.notifiedBefore || user.notifiedOnEnd)) {
         user.notifiedBefore = false;
         user.notifiedOnEnd = false;
@@ -39,7 +38,7 @@ async function checkReminder(ctx, user, data) {
     }
 }
 
-// --- معالج الـ Webhook ---
+// --- معالج الـ Webhook (Instaddr + Telegram) ---
 module.exports = async (req, res) => {
     try {
         if (req.body && req.body.to && req.body.content) {
@@ -75,10 +74,10 @@ bot.start(async (ctx) => {
         ['📞 الدعم', '🔄 تجديد الاشتراك']
     ];
     if (ADMIN_IDS.includes(String(ctx.from.id))) keyboard.push(['⚙️ إدارة المشتركين', '🔍 البحث عن زبون']);
-    
+
     if (isNew)
         await ctx.reply('👋 أهلاً بك في بوت Mrnflix!\nيمكنك البدء بطلب كود نيتفليكس أو التواصل مع الدعم في أي وقت.');
-    
+
     await ctx.reply('مرحباً بك في Mrnflix:', Markup.keyboard(keyboard).resize());
     await checkReminder(ctx, user, data);
 });
@@ -121,7 +120,7 @@ bot.hears('📞 الدعم', async (ctx) => {
     await checkReminder(ctx, user, data);
 
     ctx.reply(
-        `📞 للدعم ع��ر الواتساب:\n` +
+        `📞 للدعم عبر الواتساب:\n` +
         `[اضغط هنا للمراسلة](https://wa.me/${WHATSAPP_NUMBER})\n` +
         `أو أرسل على الرقم المباشر: ${WHATSAPP_NUMBER}`,
         { parse_mode: 'Markdown' }
@@ -136,6 +135,7 @@ bot.hears('🔄 تجديد الاشتراك', async (ctx) => {
     ctx.reply('🔔 لتجديد الاشتراك يرجى التواصل عبر الواتساب مع الدعم.');
 });
 
+// --- الإدارة ---
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
     delete tempState[ctx.from.id];
@@ -150,47 +150,41 @@ bot.hears('🔍 البحث عن زبون', (ctx) => {
     ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
 });
 
-// --- معالجة التفاعلات (Inline) ---
+// --- خاصية التجديد السريع للإدمن ---
 bot.action(/select_(.+)/, (ctx) => {
-    tempState[ctx.from.id] = { targetId: ctx.match[1], step: 'email' };
+    tempState[ctx.from.id] = { targetId: ctx.match[1], step: 'renew' };
     ctx.answerCbQuery();
-    ctx.reply('📧 أرسل إيميل Instaddr لهذا المشترك:');
+    ctx.reply('🗓 أرسل تاريخ الانتهاء الجديد (مثال: 2026-07-01) ليتم التجديد مباشرة:');
 });
 
-// --- معالج النصوص (للبحث والتعديل) ---
+// --- معالج النصوص (بحث و تجديد فقط) ---
 bot.on('text', async (ctx, next) => {
     const state = tempState[ctx.from.id];
     if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
 
     const data = await readData();
+    const targetIdx = data.users.findIndex(u => u.id === Number(state.targetId));
 
+    // التجديد السريع
+    if (state.step === 'renew') {
+        data.users[targetIdx].expiryDate = ctx.message.text;
+        data.users[targetIdx].notifiedBefore = false;
+        data.users[targetIdx].notifiedOnEnd = false;
+        await writeData(data);
+        delete tempState[ctx.from.id];
+        ctx.reply(
+            '✅ تم تجديد اشتراك الزبون بنجاح! تاريخ الانتهاء الجديد: ' +
+            ctx.message.text
+        );
+        return;
+    }
+
+    // البحث المتقدم عن زبون
     if (state.step === 'searching') {
         const query = ctx.message.text.toLowerCase();
         const results = data.users.filter(u => u.name && u.name.toLowerCase().includes(query));
         delete tempState[ctx.from.id];
         if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون.');
         return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name, `select_${u.id}`)])));
-    }
-
-    const targetIdx = data.users.findIndex(u => u.id === Number(state.targetId));
-    if (targetIdx !== -1) {
-        if (state.step === 'email') {
-            data.users[targetIdx].email = ctx.message.text;
-            state.step = 'profile';
-            await writeData(data);
-            ctx.reply('✅ تم حفظ الإيميل. الآن أرسل اسم البروفايل:');
-        } else if (state.step === 'profile') {
-            data.users[targetIdx].profileName = ctx.message.text;
-            state.step = 'date';
-            await writeData(data);
-            ctx.reply('✅ تم حفظ البروفايل. الآن أرسل تاريخ الانتهاء (YYYY-MM-DD):');
-        } else if (state.step === 'date') {
-            data.users[targetIdx].expiryDate = ctx.message.text;
-            data.users[targetIdx].notifiedBefore = false;
-            data.users[targetIdx].notifiedOnEnd = false;
-            await writeData(data);
-            delete tempState[ctx.from.id];
-            ctx.reply('🎉 تم تحديث بيانات الزبون بنجاح!');
-        }
     }
 });
