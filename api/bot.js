@@ -5,10 +5,8 @@ const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
 let tempState = {};
 
-// رقم الواتساب (الجزائر)
 const WHATSAPP_NUMBER = "213555862000";
 
-// دالة التذكير الخاصة
 async function checkReminder(ctx, user, data) {
     if (!user || !user.expiryDate) return;
     const today = new Date();
@@ -18,19 +16,16 @@ async function checkReminder(ctx, user, data) {
     const diffTime = expiry.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
-    // قبل يوم من الانتهاء
     if (diffDays === 1 && user.notifiedBefore !== true) {
         await ctx.replyWithHTML(`⏰ تذكير: باقي يوم واحد فقط على انتهاء اشتراكك. يرجى التجديد لتفادي الانقطاع.`);
         user.notifiedBefore = true;
         await writeData(data);
     }
-    // يوم الانتهاء بالضبط
     else if (diffDays === 0 && user.notifiedOnEnd !== true) {
         await ctx.replyWithHTML(`⚠️ اليوم هو آخر يوم في اشتراكك! لتجديد الاشتراك تواصل مع الدعم لتفادي توقف الخدمة.`);
         user.notifiedOnEnd = true;
         await writeData(data);
     }
-    // إذا جدد الاشتراك (أعيد التاريخ)، أزل إشعارات التذكير
     if (diffDays > 1 && (user.notifiedBefore || user.notifiedOnEnd)) {
         user.notifiedBefore = false;
         user.notifiedOnEnd = false;
@@ -47,7 +42,7 @@ module.exports = async (req, res) => {
                 const data = await readData();
                 const targetUsers = data.users.filter(u => u.email === req.body.to);
                 for (const user of targetUsers) {
-                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك كود جديد!</b>\n🔢 الكود: <code>${code}</code>`, { parse_mode: 'HTML' });
+                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك ك��د جديد!</b>\n🔢 الكود: <code>${code}</code>`, { parse_mode: 'HTML' });
                 }
             }
             return res.status(200).send('OK');
@@ -56,8 +51,6 @@ module.exports = async (req, res) => {
     } catch (e) { console.error(e); }
     res.status(200).send('OK');
 };
-
-// --- الأوامر المباشرة (الأزرار الرئيسية) ---
 
 bot.start(async (ctx) => {
     const data = await readData();
@@ -89,15 +82,12 @@ bot.hears('📋 حالتي', async (ctx) => {
     if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل.');
 
     await checkReminder(ctx, user, data);
-
-    // حساب الأيام المتبقية
     const today = new Date();
     const expiry = new Date(user.expiryDate);
     today.setHours(0,0,0,0);
     expiry.setHours(0,0,0,0);
     const diffTime = expiry.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
     let msg = `👤 البروفايل: ${user.profileName}\n📅 الانتهاء: <code>${user.expiryDate}</code>`;
     if (diffDays >= 0)
         msg += `\n⏳ المتبقي: <b>${diffDays}</b> يوم`;
@@ -150,14 +140,47 @@ bot.hears('🔍 البحث عن زبون', (ctx) => {
     ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
 });
 
-// --- خاصية التجديد السريع للإدمن ---
-bot.action(/select_(.+)/, (ctx) => {
+// --- عند اختيار زبون من الإدارة تظهر له خيارات (تجديد/حذف) ---
+bot.action(/select_(.+)/, async (ctx) => {
+    const userId = ctx.match[1];
+    tempState[ctx.from.id] = { targetId: userId, step: null };
+    ctx.answerCbQuery();
+
+    // أزرار إنلاين: حذف - تجديد فقط
+    await ctx.reply(
+      'اختر الإجراء المرغوب:',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('🗑 حذف هذا المشترك', `delete_${userId}`)],
+        [Markup.button.callback('🔁 تجديد الاشتراك', `renew_${userId}`)]
+      ])
+    );
+});
+
+// --- حذف المشترك ---
+bot.action(/delete_(.+)/, async (ctx) => {
+    const userId = ctx.match[1];
+    const data = await readData();
+    const idx = data.users.findIndex(u => String(u.id) === String(userId));
+    if (idx !== -1) {
+        const deletedUser = data.users[idx];
+        data.users.splice(idx, 1);
+        await writeData(data);
+        ctx.reply(`✅ تم حذف المشترك (${deletedUser.name || deletedUser.id}) بنجاح!`);
+    } else {
+        ctx.reply('❌ لم يتم العثور على هذا المشترك.');
+    }
+    tempState[ctx.from.id] = {};
+    ctx.answerCbQuery();
+});
+
+// --- التجديد السريع من زر الإنلاين ---
+bot.action(/renew_(.+)/, (ctx) => {
     tempState[ctx.from.id] = { targetId: ctx.match[1], step: 'renew' };
     ctx.answerCbQuery();
     ctx.reply('🗓 أرسل تاريخ الانتهاء الجديد (مثال: 2026-07-01) ليتم التجديد مباشرة:');
 });
 
-// --- معالج النصوص (بحث و تجديد فقط) ---
+// --- معالج النصوص (لبحث وتجديد فقط) ---
 bot.on('text', async (ctx, next) => {
     const state = tempState[ctx.from.id];
     if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
