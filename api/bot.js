@@ -2,25 +2,25 @@ const { Telegraf, Markup } = require('telegraf');
 const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// معرف الأدمن (Chat ID الخاص بك) - تأكد من تحديثه
+// معرف الأدمن الخاص بك بناءً على تحديثك الأخير
 const ADMIN_ID = 6197540099; 
 
-// نصوص دليل الاستخدام بتنسيق احترافي
+// نصوص دليل الاستخدام بتنسيق منظم يسهل نسخه
 const GUIDES = {
     admin: `⚙️ <b>قائمة أوامر الإدارة (Monsieur NFLIX):</b>\n\n` +
            `<code>/make_reseller &lt;ID&gt;</code>\n` +
-           `تعيين مستخدم كمورد (Reseller) لتمكينه من إضافة زبائن.\n\n` +
+           `تعيين مستخدم جديد كمورد (Reseller) في النظام.\n\n` +
            `<code>/add_client &lt;email&gt; &lt;name&gt;</code>\n` +
            `إضافة حساب جديد لزبائنك الشخصيين.\n\n` +
            `ℹ️ <b>Information:</b>\n` +
-           `/info - عرض حالة حسابك (Admin).\n` +
-           `/support - عرض رسالة المساعدة هذه.`,
+           `/start - لتشغيل البوت وتحديث أزرار القائمة.\n` +
+           `/support - التواصل مع الدعم الفني والحصول على المساعدة.`,
     
     reseller: `📖 <b>دليل استخدام المورد:</b>\n\n` +
               `<code>/add_client &lt;email&gt; &lt;name&gt;</code>\n` +
-              `ربط إيميل جديد باسم زبون لتوجيه الأكواد إليه آلياً.\n\n` +
+              `إضافة زبون وإيميل جديد لتلقي الأكواد الخاصة به آلياً.\n\n` +
               `ℹ️ <b>تنبيه:</b>\n` +
-              `ستصلك تنبيهات الأكواد وروابط Household بأسماء زبائنك مباشرة هنا.`
+              `ستصلك جميع تنبيهات الأكواد وروابط Household بأسماء زبائنك مباشرة هنا.`
 };
 
 module.exports = async (req, res) => {
@@ -31,7 +31,7 @@ module.exports = async (req, res) => {
             const chatId = req.body.message.from.id;
             const text = req.body.message.text;
 
-            // تسجيل المستخدم تلقائياً لضمان التعرف عليه
+            // تسجيل المستخدم تلقائياً في قاعدة البيانات إذا لم يكن موجوداً
             let user = data.users.find(u => u.id === chatId);
             if (!user) {
                 user = { id: chatId, name: req.body.message.from.first_name, role: 'user', emails: [], clients: {} };
@@ -41,7 +41,7 @@ module.exports = async (req, res) => {
             
             const isReseller = user.role === 'reseller' || chatId === ADMIN_ID;
 
-            // أمر البداية مع تحديث القائمة السفلية
+            // تحديث الأزرار السفلية بناءً على الرتبة
             if (text === '/start' || text === '/support') {
                 let buttons = [
                     ['🏠 طلب كود نيتفليكس', '📋 حالتي'],
@@ -58,28 +58,34 @@ module.exports = async (req, res) => {
                 );
             }
 
-            // عرض الدليل الاحترافي عند الضغط على الزر
+            // عرض دليل الاستخدام المخصص
             if (text === '📖 دليل الاستخدام' && isReseller) {
                 const guideText = (chatId === ADMIN_ID) ? GUIDES.admin : GUIDES.reseller;
                 await bot.telegram.sendMessage(chatId, guideText, { parse_mode: 'HTML' });
             }
 
-            // [الأدمن] تعيين مورد جديد
+            // [للأدمن] أمر تعيين مورد مع رسائل تشخيص
             if (chatId === ADMIN_ID && text.startsWith('/make_reseller')) {
-                const targetId = parseInt(text.split(' ')[1]);
+                const parts = text.split(' ');
+                const targetId = parseInt(parts[1]);
+
+                if (!targetId) {
+                    return await bot.telegram.sendMessage(chatId, "⚠️ يرجى كتابة الـ ID بعد الأمر.\nمثال: <code>/make_reseller 123456</code>", { parse_mode: 'HTML' });
+                }
+
                 const userIndex = data.users.findIndex(u => u.id === targetId);
                 
                 if (userIndex !== -1) {
                     data.users[userIndex].role = 'reseller';
                     await writeData(data);
-                    await bot.telegram.sendMessage(chatId, `✅ تم تفعيل رتبة "مورد" للمستخدم: ${targetId}`);
-                    await bot.telegram.sendMessage(targetId, "🎊 مبروك! تم منحك صلاحيات مورد. ارسل /start لمشاهدة الخيارات الجديدة.");
+                    await bot.telegram.sendMessage(chatId, `✅ تم تعيين المستخدم <code>${targetId}</code> كمورد بنجاح.`, { parse_mode: 'HTML' });
+                    await bot.telegram.sendMessage(targetId, "🎊 مبروك! تم منحك صلاحيات مورد. أرسل /start لتفعيل الميزات.");
                 } else {
-                    await bot.telegram.sendMessage(chatId, "❌ المستخدم لم يسجل في البوت بعد. اطلب منه الضغط على Start.");
+                    await bot.telegram.sendMessage(chatId, `❌ لم أجد مستخدم بهذا الرقم (${targetId}) في النظام.\nيجب عليه إرسال /start أولاً.`);
                 }
             }
 
-            // [المورد/الأدمن] إضافة زبون جديد
+            // [للمورد/الأدمن] ربط حساب بزبون
             if (isReseller && text.startsWith('/add_client')) {
                 const parts = text.split(' ');
                 if (parts.length >= 3) {
@@ -94,13 +100,11 @@ module.exports = async (req, res) => {
 
                     await writeData(data);
                     await bot.telegram.sendMessage(chatId, `✅ تم ربط الحساب <code>${email}</code> بزبونك <b>${clientName}</b>`, { parse_mode: 'HTML' });
-                } else {
-                    await bot.telegram.sendMessage(chatId, "⚠️ الصيغة الخاطئة. استخدم: <code>/add_client email name</code>", { parse_mode: 'HTML' });
                 }
             }
         }
 
-        // --- معالجة توجيه الأكواد التلقائية ---
+        // معالجة الأكواد الواردة من المايلر
         if (req.body && req.body.to && req.body.content) {
             const emailTo = req.body.to.toLowerCase().trim();
             const content = req.body.content;
