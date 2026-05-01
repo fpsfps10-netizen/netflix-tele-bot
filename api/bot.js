@@ -22,7 +22,7 @@ module.exports = async (req, res) => {
         const isReseller = user.role === 'reseller' || chatId === ADMIN_ID;
 
         if (text === '/test') {
-            return await bot.telegram.sendMessage(chatId, "✅ النظام يعمل الآن بالنسخة المحدثة.");
+            return await bot.telegram.sendMessage(chatId, "✅ نظام Monsieur NFLIX يعمل بالنسخة المحدثة.");
         }
 
         if (text.startsWith('/make_reseller') && chatId === ADMIN_ID) {
@@ -31,7 +31,7 @@ module.exports = async (req, res) => {
             if (userIndex !== -1) {
                 data.users[userIndex].role = 'reseller';
                 await writeData(data);
-                await bot.telegram.sendMessage(chatId, `✅ تم تفعيل رتبة مورد للمعرف: ${targetId}`);
+                await bot.telegram.sendMessage(chatId, `✅ تم ترقية ${targetId} إلى مورد.`);
                 try { await bot.telegram.sendMessage(targetId, "🎊 تم منحك صلاحيات مورد!"); } catch(e){}
             } else {
                 await bot.telegram.sendMessage(chatId, "❌ المستخدم غير مسجل، يجب أن يرسل /start أولاً.");
