@@ -3,7 +3,7 @@ const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 // معرف الأدمن (Chat ID الخاص بك) - تأكد من تحديثه
-const ADMIN_ID = 123456789; 
+const ADMIN_ID = 6197540099; 
 
 // نصوص دليل الاستخدام بتنسيق احترافي
 const GUIDES = {
