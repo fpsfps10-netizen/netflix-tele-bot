@@ -3,10 +3,29 @@ const { readData, writeData } = require('../lib/database');
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
 const ADMIN_IDS = process.env.ADMIN_USER_IDS ? process.env.ADMIN_USER_IDS.split(',') : [process.env.ADMIN_USER_ID];
-let tempState = {};
-
 const WHATSAPP_NUMBER = "213555862000";
 
+// --- دوال مساعدة لحفظ حالة الأدمن في قاعدة البيانات (بديل tempState) ---
+async function setAdminState(userId, stateObj) {
+    const data = await readData();
+    let user = data.users.find(u => String(u.id) === String(userId));
+    if (user) {
+        user.adminState = stateObj;
+        await writeData(data);
+    }
+}
+
+async function getAdminState(userId) {
+    const data = await readData();
+    const user = data.users.find(u => String(u.id) === String(userId));
+    return user ? user.adminState : null;
+}
+
+async function clearAdminState(userId) {
+    await setAdminState(userId, null);
+}
+
+// --- دالة التذكير التلقائية ---
 async function checkReminder(ctx, user, data) {
     if (!user || !user.expiryDate) return;
     const today = new Date();
@@ -42,7 +61,7 @@ module.exports = async (req, res) => {
                 const data = await readData();
                 const targetUsers = data.users.filter(u => u.email === req.body.to);
                 for (const user of targetUsers) {
-                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك ك��د جديد!</b>\n🔢 الكود: <code>${code}</code>`, { parse_mode: 'HTML' });
+                    await bot.telegram.sendMessage(user.id, `📩 <b>وصلك كود جديد!</b>\n🔢 الكود: <code>${code}</code>`, { parse_mode: 'HTML' });
                 }
             }
             return res.status(200).send('OK');
@@ -57,7 +76,7 @@ bot.start(async (ctx) => {
     let isNew = false;
     let user = data.users.find(u => u.id === ctx.from.id);
     if (!user) {
-        user = { id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '' };
+        user = { id: ctx.from.id, name: ctx.from.first_name, email: '', profileName: '', expiryDate: '', adminState: null };
         data.users.push(user);
         await writeData(data);
         isNew = true;
@@ -76,7 +95,7 @@ bot.start(async (ctx) => {
 });
 
 bot.hears('📋 حالتي', async (ctx) => {
-    delete tempState[ctx.from.id];
+    await clearAdminState(ctx.from.id);
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     if (!user || !user.expiryDate) return ctx.reply('ℹ️ لا يوجد اشتراك مسجل.');
@@ -88,7 +107,7 @@ bot.hears('📋 حالتي', async (ctx) => {
     expiry.setHours(0,0,0,0);
     const diffTime = expiry.getTime() - today.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    let msg = `👤 البروفايل: ${user.profileName}\n📅 الانتهاء: <code>${user.expiryDate}</code>`;
+    let msg = `👤 البروفايل: ${user.profileName || 'غير مسجل'}\n📅 الانتهاء: <code>${user.expiryDate}</code>`;
     if (diffDays >= 0)
         msg += `\n⏳ المتبقي: <b>${diffDays}</b> يوم`;
     else
@@ -97,14 +116,15 @@ bot.hears('📋 حالتي', async (ctx) => {
 });
 
 bot.hears('🏠 طلب كود نيتفليكس', async (ctx) => {
-    delete tempState[ctx.from.id];
+    await clearAdminState(ctx.from.id);
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     await checkReminder(ctx, user, data);
-    ctx.reply('✅ نظام الأكواد التلقائي نشط.');
+    ctx.reply('✅ نظام الأكواد التلقائي نشط. سيصلك الكود هنا بمجرد طلبه من تطبيق نيتفليكس بشرط أن يكون بريدك الإلكتروني مربوطاً بحسابك.');
 });
 
 bot.hears('📞 الدعم', async (ctx) => {
+    await clearAdminState(ctx.from.id);
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     await checkReminder(ctx, user, data);
@@ -118,6 +138,7 @@ bot.hears('📞 الدعم', async (ctx) => {
 });
 
 bot.hears('🔄 تجديد الاشتراك', async (ctx) => {
+    await clearAdminState(ctx.from.id);
     const data = await readData();
     const user = data.users.find(u => u.id === ctx.from.id);
     await checkReminder(ctx, user, data);
@@ -125,33 +146,34 @@ bot.hears('🔄 تجديد الاشتراك', async (ctx) => {
     ctx.reply('🔔 لتجديد الاشتراك يرجى التواصل عبر الواتساب مع الدعم.');
 });
 
-// --- الإدارة ---
+// --- أوامر الإدارة ---
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
-    delete tempState[ctx.from.id];
+    await clearAdminState(ctx.from.id);
     const data = await readData();
     const list = data.users.slice(-15).map(u => [Markup.button.callback(u.name || String(u.id), `select_${u.id}`)]);
     ctx.reply('⚙️ قائمة آخر المشتركين للتعديل:', Markup.inlineKeyboard(list));
 });
 
-bot.hears('🔍 البحث عن زبون', (ctx) => {
+bot.hears('🔍 البحث عن زبون', async (ctx) => {
     if (!ADMIN_IDS.includes(String(ctx.from.id))) return;
-    tempState[ctx.from.id] = { step: 'searching' };
-    ctx.reply('🔎 أرسل اسم الزبون للبحث عنه:');
+    await setAdminState(ctx.from.id, { step: 'searching' });
+    ctx.reply('🔎 أرسل اسم الزبون أو الإيميل الخاص به للبحث عنه:');
 });
 
-// --- عند اختيار زبون من الإدارة تظهر له خيارات (تجديد/حذف) ---
+// --- عند اختيار زبون من الإدارة ---
 bot.action(/select_(.+)/, async (ctx) => {
     const userId = ctx.match[1];
-    tempState[ctx.from.id] = { targetId: userId, step: null };
+    await clearAdminState(ctx.from.id); // مسح أي حالة سابقة
     ctx.answerCbQuery();
 
-    // أزرار إنلاين: حذف - تجديد فقط
     await ctx.reply(
-      'اختر الإجراء المرغوب:',
+      'اختر الإجراء المرغوب للمشترك:',
       Markup.inlineKeyboard([
         [Markup.button.callback('🗑 حذف هذا المشترك', `delete_${userId}`)],
-        [Markup.button.callback('🔁 تجديد الاشتراك', `renew_${userId}`)]
+        [Markup.button.callback('🔁 تجديد / إضافة تاريخ الانتهاء', `renew_${userId}`)],
+        [Markup.button.callback('📧 ربط أو تعديل إيميل الأكواد', `email_${userId}`)],
+        [Markup.button.callback('👤 تعديل اسم البروفايل', `profile_${userId}`)]
       ])
     );
 });
@@ -169,45 +191,88 @@ bot.action(/delete_(.+)/, async (ctx) => {
     } else {
         ctx.reply('❌ لم يتم العثور على هذا المشترك.');
     }
-    tempState[ctx.from.id] = {};
+    await clearAdminState(ctx.from.id);
     ctx.answerCbQuery();
 });
 
-// --- التجديد السريع من زر الإنلاين ---
-bot.action(/renew_(.+)/, (ctx) => {
-    tempState[ctx.from.id] = { targetId: ctx.match[1], step: 'renew' };
+// --- تجهيز حالات الإدارة من أزرار الإنلاين ---
+bot.action(/renew_(.+)/, async (ctx) => {
+    await setAdminState(ctx.from.id, { targetId: ctx.match[1], step: 'renew' });
     ctx.answerCbQuery();
-    ctx.reply('🗓 أرسل تاريخ الانتهاء الجديد (مثال: 2026-07-01) ليتم التجديد مباشرة:');
+    ctx.reply('🗓 أرسل تاريخ الانتهاء الجديد بصيغة (YYYY-MM-DD) مثال: 2026-07-01');
 });
 
-// --- معالج النصوص (لبحث وتجديد فقط) ---
+bot.action(/email_(.+)/, async (ctx) => {
+    await setAdminState(ctx.from.id, { targetId: ctx.match[1], step: 'email' });
+    ctx.answerCbQuery();
+    ctx.reply('📧 أرسل البريد الإلكتروني (Instaddr) لربطه بهذا الزبون:');
+});
+
+bot.action(/profile_(.+)/, async (ctx) => {
+    await setAdminState(ctx.from.id, { targetId: ctx.match[1], step: 'profile' });
+    ctx.answerCbQuery();
+    ctx.reply('👤 أرسل اسم البروفايل الخاص بهذا الزبون:');
+});
+
+// --- معالج النصوص (لبحث، تجديد، إيميل، بروفايل) ---
 bot.on('text', async (ctx, next) => {
-    const state = tempState[ctx.from.id];
-    if (!state || !ADMIN_IDS.includes(String(ctx.from.id))) return next();
+    if (!ADMIN_IDS.includes(String(ctx.from.id))) return next();
+
+    const state = await getAdminState(ctx.from.id);
+    if (!state || !state.step) return next();
 
     const data = await readData();
-    const targetIdx = data.users.findIndex(u => u.id === Number(state.targetId));
-
-    // التجديد السريع
-    if (state.step === 'renew') {
-        data.users[targetIdx].expiryDate = ctx.message.text;
-        data.users[targetIdx].notifiedBefore = false;
-        data.users[targetIdx].notifiedOnEnd = false;
-        await writeData(data);
-        delete tempState[ctx.from.id];
-        ctx.reply(
-            '✅ تم تجديد اشتراك الزبون بنجاح! تاريخ الانتهاء الجديد: ' +
-            ctx.message.text
-        );
-        return;
-    }
 
     // البحث المتقدم عن زبون
     if (state.step === 'searching') {
         const query = ctx.message.text.toLowerCase();
-        const results = data.users.filter(u => u.name && u.name.toLowerCase().includes(query));
-        delete tempState[ctx.from.id];
-        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون.');
-        return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(results.map(u => [Markup.button.callback(u.name, `select_${u.id}`)])));
+        // البحث بالاسم أو الإيميل
+        const results = data.users.filter(u => 
+            (u.name && u.name.toLowerCase().includes(query)) || 
+            (u.email && u.email.toLowerCase().includes(query))
+        );
+        await clearAdminState(ctx.from.id);
+        if (results.length === 0) return ctx.reply('❌ لم يتم العثور على زبون يحمل هذا الاسم أو الإيميل.');
+        
+        return ctx.reply('نتائج البحث:', Markup.inlineKeyboard(
+            results.map(u => [Markup.button.callback(`${u.name} ${u.email ? `(${u.email})` : ''}`, `select_${u.id}`)])
+        ));
+    }
+
+    // المعالجات التي تتطلب معرفة الزبون المستهدف
+    const targetIdx = data.users.findIndex(u => String(u.id) === String(state.targetId));
+    if (targetIdx === -1) {
+        await clearAdminState(ctx.from.id);
+        return ctx.reply('❌ حدث خطأ، لم يتم العثور على الزبون في قاعدة البيانات.');
+    }
+
+    // التجديد
+    if (state.step === 'renew') {
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(ctx.message.text)) {
+            return ctx.reply('❌ صيغة التاريخ غير صحيحة! الرجاء كتابة التاريخ بصيغة السنة-الشهر-اليوم (مثال: 2026-07-01).');
+        }
+        data.users[targetIdx].expiryDate = ctx.message.text;
+        data.users[targetIdx].notifiedBefore = false;
+        data.users[targetIdx].notifiedOnEnd = false;
+        await writeData(data);
+        await clearAdminState(ctx.from.id);
+        return ctx.reply(`✅ تم تجديد اشتراك الزبون بنجاح!\nتاريخ الانتهاء الجديد: ${ctx.message.text}`);
+    }
+
+    // ربط الإيميل
+    if (state.step === 'email') {
+        data.users[targetIdx].email = ctx.message.text.trim();
+        await writeData(data);
+        await clearAdminState(ctx.from.id);
+        return ctx.reply(`✅ تم ربط الإيميل بنجاح!\nالإيميل المسجل: ${data.users[targetIdx].email}`);
+    }
+
+    // ربط البروفايل
+    if (state.step === 'profile') {
+        data.users[targetIdx].profileName = ctx.message.text.trim();
+        await writeData(data);
+        await clearAdminState(ctx.from.id);
+        return ctx.reply(`✅ تم تحديث اسم البروفايل بنجاح!\nالاسم الجديد: ${data.users[targetIdx].profileName}`);
     }
 });
