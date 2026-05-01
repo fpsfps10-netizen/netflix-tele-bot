@@ -25,28 +25,6 @@ async function clearAdminState(userId) {
     await setAdminState(userId, null);
 }
 
-// --- دالة التذكير والتحقق من التواريخ ---
-async function checkReminder(ctx, user, data) {
-    if (!user || !user.expiryDate) return;
-    const today = new Date();
-    const expiry = new Date(user.expiryDate);
-    today.setHours(0,0,0,0);
-    expiry.setHours(0,0,0,0);
-    const diffTime = expiry.getTime() - today.getTime();
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-    if (diffDays === 1 && user.notifiedBefore !== true) {
-        await ctx.replyWithHTML(`⏰ تذكير: باقي يوم واحد فقط على انتهاء اشتراكك. يرجى التجديد لتفادي الانقطاع.`);
-        user.notifiedBefore = true;
-        await writeData(data);
-    }
-    else if (diffDays === 0 && user.notifiedOnEnd !== true) {
-        await ctx.replyWithHTML(`⚠️ اليوم هو آخر يوم في اشتراكك! لتجديد الاشتراك تواصل مع الدعم.`);
-        user.notifiedOnEnd = true;
-        await writeData(data);
-    }
-}
-
 // --- معالج الـ Webhook (استقبال الأكواد والتحديثات) ---
 module.exports = async (req, res) => {
     try {
@@ -56,7 +34,6 @@ module.exports = async (req, res) => {
                 const data = await readData();
                 const targetUsers = data.users.filter(u => u.email === req.body.to);
                 for (const user of targetUsers) {
-                    // فحص إذا كان اشتراك المستخدم مازال سارياً قبل إرسال الكود
                     const today = new Date();
                     const expiry = new Date(user.expiryDate || 0);
                     if (expiry >= today) {
@@ -71,7 +48,7 @@ module.exports = async (req, res) => {
     res.status(200).send('OK');
 };
 
-// --- الأوامر الأساسية ---
+// --- الأوامر الأساسية للمستخدمين ---
 bot.start(async (ctx) => {
     const data = await readData();
     let user = data.users.find(u => u.id === ctx.from.id);
@@ -115,9 +92,6 @@ bot.hears('🏠 طلب كود نيتفليكس', async (ctx) => {
 
     const today = new Date();
     const expiry = new Date(user.expiryDate);
-    today.setHours(0,0,0,0);
-    expiry.setHours(0,0,0,0);
-
     if (expiry < today) {
         return ctx.replyWithHTML(`🚫 <b>اشتراكك منتهٍ!</b>\nانتهى بتاريخ: <code>${user.expiryDate}</code>\nيرجى التجديد لتفعيل طلب الأكواد.`);
     }
@@ -127,9 +101,9 @@ bot.hears('🏠 طلب كود نيتفليكس', async (ctx) => {
     ctx.reply('✅ نظام الأكواد نشط. سيصلك الكود هنا فور طلبه من التطبيق.');
 });
 
-bot.hears('📞 الدعم', (ctx) => ctx.reply(`📞 للدوام عبر الواتساب: https://wa.me/${WHATSAPP_NUMBER}`));
+bot.hears('📞 الدعم', (ctx) => ctx.reply(`📞 للدعم عبر الواتساب: https://wa.me/${WHATSAPP_NUMBER}`));
 
-bot.hears('🔄 تجديد الاشتراك', (ctx) => ctx.reply('🔔 لتجديد الاشتراك يرجى التواصل مع الدعم الفني.'));
+bot.hears('🔄 تجديد الاشتراك', (ctx) => ctx.reply('🔔 لتجديد الاشتراك يرجى التواصل مع الدعم الفني عبر الواتساب.'));
 
 // --- قسم الإدارة ---
 bot.hears('⚙️ إدارة المشتركين', async (ctx) => {
@@ -167,13 +141,13 @@ bot.action(/delete_(.+)/, async (ctx) => {
 bot.action(/renew_(.+)/, async (ctx) => {
     await setAdminState(ctx.from.id, { targetId: ctx.match[1], step: 'renew' });
     ctx.answerCbQuery();
-    ctx.reply('🗓 أرسل التاريخ الجديد (YYYY-MM-DD):');
+    ctx.reply('🗓 أرسل تاريخ الانتهاء الجديد بصيغة (YYYY-MM-DD):');
 });
 
 bot.action(/email_(.+)/, async (ctx) => {
     await setAdminState(ctx.from.id, { targetId: ctx.match[1], step: 'email' });
     ctx.answerCbQuery();
-    ctx.reply('📧 أرسل الإيميل الجديد:');
+    ctx.reply('📧 أرسل الإيميل المربوط بـ Instaddr:');
 });
 
 bot.action(/profile_(.+)/, async (ctx) => {
@@ -189,6 +163,8 @@ bot.on('text', async (ctx, next) => {
     if (!state) return next();
 
     const data = await readData();
+    
+    // منطق البحث
     if (state.step === 'searching') {
         const query = ctx.message.text.toLowerCase();
         const results = data.users.filter(u => (u.name && u.name.toLowerCase().includes(query)) || (u.email && u.email.toLowerCase().includes(query)));
@@ -198,13 +174,21 @@ bot.on('text', async (ctx, next) => {
     }
 
     const targetIdx = data.users.findIndex(u => String(u.id) === String(state.targetId));
-    if (targetIdx === -1) return await clearAdminState(ctx.from.id);
+    if (targetIdx === -1) {
+        await clearAdminState(ctx.from.id);
+        return ctx.reply('❌ لم يتم العثور على المشترك.');
+    }
 
+    // منطق التجديد وتصفير التنبيهات
     if (state.step === 'renew') {
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(ctx.message.text)) return ctx.reply('❌ خطأ في الصيغة.');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(ctx.message.text)) {
+            return ctx.reply('❌ صيغة التاريخ غير صحيحة. استخدم YYYY-MM-DD');
+        }
         data.users[targetIdx].expiryDate = ctx.message.text;
+        // تصفير عدادات التنبيه لضمان وصولها في موعد التجديد الجديد
         data.users[targetIdx].notifiedBefore = false;
         data.users[targetIdx].notifiedOnEnd = false;
+        data.users[targetIdx].notifiedAfter = false;
     } else if (state.step === 'email') {
         data.users[targetIdx].email = ctx.message.text.trim();
     } else if (state.step === 'profile') {
@@ -213,5 +197,5 @@ bot.on('text', async (ctx, next) => {
 
     await writeData(data);
     await clearAdminState(ctx.from.id);
-    ctx.reply('✅ تم التحديث بنجاح.');
+    ctx.reply('✅ تم تحديث البيانات بنجاح.');
 });
