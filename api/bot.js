@@ -21,7 +21,7 @@ module.exports = async (req, res) => {
     try {
         const data = await readData();
 
-        // 1. استقبال الأكواد (Webhook)
+        // 1. استقبال الأكواد وروابط التلفاز (Webhook)
         if (req.body && req.body.to && req.body.content) {
             const emailTo = req.body.to.toLowerCase().trim();
             const fullContent = req.body.content;
@@ -32,7 +32,7 @@ module.exports = async (req, res) => {
                 const expiryDate = u.expiries ? u.expiries[emailTo] : null;
 
                 if (!isSubscriptionValid(expiryDate)) {
-                    await bot.telegram.sendMessage(u.id, `⚠️ اشتراك <b>${displayName}</b> انتهى. يرجى التجديد.`, { parse_mode: 'HTML' });
+                    await bot.telegram.sendMessage(u.id, `⚠️ اشتراك <b>${displayName}</b> انتهى. يرجى التجديد لاستلام الأكواد.`, { parse_mode: 'HTML' });
                     continue; 
                 }
 
@@ -42,13 +42,13 @@ module.exports = async (req, res) => {
                         Markup.inlineKeyboard([[Markup.button.url('✅ تأكيد الآن', urlMatch[0])]]));
                 } else {
                     const codeMatch = fullContent.match(/\b\d{4}\b/g);
-                    if (codeMatch) await bot.telegram.sendMessage(u.id, `🔢 الكود: <code>${codeMatch[codeMatch.length-1]}</code>`, { parse_mode: 'HTML' });
+                    if (codeMatch) await bot.telegram.sendMessage(u.id, `👤 المشترك: <b>${displayName}</b>\n🔢 كود الدخول: <code>${codeMatch[codeMatch.length-1]}</code>`, { parse_mode: 'HTML' });
                 }
             }
             return res.status(200).send('OK');
         }
 
-        // 2. معالجة رسائل تليجرام
+        // 2. معالجة رسائل تليجرام المباشرة
         if (!req.body || !req.body.message) return res.status(200).send('OK');
         const chatId = req.body.message.from.id;
         const text = req.body.message.text || "";
@@ -56,13 +56,10 @@ module.exports = async (req, res) => {
 
         let user = data.users.find(u => u.id === chatId);
         if (!user) {
-            const referralCode = `MN-${chatId.toString().slice(0, 6)}`;
             user = { 
                 id: chatId, 
-                name: req.body.message.from.first_name || "مستخدم جديد", 
+                name: req.body.message.from.first_name || "مستخدم", 
                 role: 'user', 
-                points: 0, 
-                referralCode: referralCode, 
                 emails: [], 
                 clients: {}, 
                 expiries: {} 
@@ -73,33 +70,34 @@ module.exports = async (req, res) => {
 
         const isReseller = user.role === 'reseller' || isAdmin;
 
+        // القائمة الرئيسية
         if (text === '/start') {
             const menu = [['🏠 طلب كود نيتفليكس', '📋 حالتي'], ['⚙️ إدارة المشتركين']];
             await bot.telegram.sendMessage(chatId, "مرحباً بك في Monsieur NFLIX:", Markup.keyboard(menu).resize());
             return res.status(200).send('OK');
         }
 
+        // عرض الحالة الأساسية (تم حذف النقاط)
         if (text === '📋 حالتي') {
             await bot.telegram.sendMessage(chatId, 
-                `👤 <b>الاسم:</b> ${user.name}\n💰 <b>النقاط:</b> ${user.points || 0}\n🎫 <b>رمزك:</b> <code>${user.referralCode}</code>`, { parse_mode: 'HTML' });
+                `👤 <b>الاسم:</b> ${user.name}\n` +
+                `🆔 <b>المعرف الخاص بك:</b> <code>${chatId}</code>`, { parse_mode: 'HTML' });
             return res.status(200).send('OK');
         }
 
-        // --- التعديل الجوهري هنا لعرض جميع المستخدمين ---
+        // عرض جميع المستخدمين للإدارة
         if (text === '⚙️ إدارة المشتركين' && isReseller) {
-            // جلب جميع المستخدمين المسجلين في قاعدة البيانات
             const allUsers = data.users.filter(u => u.id !== ADMIN_ID); 
-            
             if (allUsers.length === 0) {
-                await bot.telegram.sendMessage(chatId, "⚠️ لا يوجد مستخدمين مسجلين في البوت حالياً.");
+                await bot.telegram.sendMessage(chatId, "⚠️ لا يوجد مستخدمين مسجلين حالياً.");
             } else {
                 const buttons = allUsers.map(u => [Markup.button.callback(`${u.name} (ID: ${u.id})`, `view_user_${u.id}`)]);
-                await bot.telegram.sendMessage(chatId, "⚙️ قائمة جميع مستخدمي البوت:", Markup.inlineKeyboard(buttons));
+                await bot.telegram.sendMessage(chatId, "⚙️ قائمة المستخدمين النشطين:", Markup.inlineKeyboard(buttons));
             }
             return res.status(200).send('OK');
         }
 
-        // أمر التجديد ومنح النقاط
+        // أمر التجديد البسيط (بدون نقاط)
         if (isReseller && text.startsWith('/renew')) {
             const [_, email, days] = text.split(' ');
             if (email && days) {
@@ -107,15 +105,14 @@ module.exports = async (req, res) => {
                 const target = data.users.find(u => u.clients && u.clients[email.toLowerCase()]);
                 if (target) {
                     target.expiries[email.toLowerCase()] = newDate;
-                    target.points = (target.points || 0) + 5;
                     await writeData(data);
-                    await bot.telegram.sendMessage(chatId, `✅ تم التجديد لـ ${target.name}.\n📅 ينتهي: ${newDate}`);
+                    await bot.telegram.sendMessage(chatId, `✅ تم تجديد <b>${target.name}</b> لـ ${days} يوم.\n📅 ينتهي في: ${newDate}`);
                 }
             }
             return res.status(200).send('OK');
         }
 
         await bot.handleUpdate(req.body);
-    } catch (e) { console.error(e); }
+    } catch (e) { console.error("Error:", e.message); }
     if (!res.writableEnded) res.status(200).send('OK');
 };
